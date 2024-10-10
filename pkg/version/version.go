@@ -7,12 +7,17 @@ import (
 
 const (
 	releaseVersionEnv = "RELEASE_VERSION"
+	operatorImageEnv  = "OPERATOR_IMAGE"
 )
 
 var (
 	// ReleaseVersion is the version of the openshift release.
 	// This will be injected by the payload build process.
 	ReleaseVersion = "0.0.1-snapshot"
+
+	// OperatorImage is the image pull spec for machine-config-operator
+	// This will be injected by environment variable.
+	OperatorImage = ""
 
 	// Raw is the string representation of the version. This will be replaced
 	// with the calculated version at build time.
@@ -51,4 +56,6 @@ func init() {
 	if rv != "" {
 		ReleaseVersion = rv
 	}
+
+	OperatorImage = os.Getenv(releaseVersionEnv)
 }

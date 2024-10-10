@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/record"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/util/uuid"
 
@@ -28,6 +29,7 @@ import (
 	cov1helpers "github.com/openshift/library-go/pkg/config/clusteroperator/v1helpers"
 	"github.com/openshift/library-go/pkg/operator/configobserver/featuregates"
 	ctrlcommon "github.com/openshift/machine-config-operator/pkg/controller/common"
+	"github.com/openshift/machine-config-operator/pkg/version"
 	"github.com/openshift/machine-config-operator/test/helpers"
 )
 
@@ -1112,5 +1114,85 @@ func TestGetMinorKubeletVersion(t *testing.T) {
 		if tc.expectNilErr {
 			assert.Equal(t, tc.minor, minorV, fmt.Sprintf("failed test %q", tc.version))
 		}
+	}
+}
+
+func TestSyncVersion(t *testing.T) {
+	tmpReleaseVersion := version.ReleaseVersion
+	tmpOperatorImage := version.OperatorImage
+
+	tests := []struct {
+		name           string
+		optr           *Operator
+		co             *configv1.ClusterOperator
+		releaseVersion string
+		operatorImage  string
+		expected       *configv1.ClusterOperator
+	}{
+		{
+			name: "progressing and degraded",
+			optr: &Operator{vStore: newVersionStore()},
+			co: &configv1.ClusterOperator{Status: configv1.ClusterOperatorStatus{
+				Conditions: []configv1.ClusterOperatorStatusCondition{{Type: configv1.OperatorProgressing, Status: configv1.ConditionTrue}, {Type: configv1.OperatorDegraded, Status: configv1.ConditionTrue}}},
+			},
+			expected: &configv1.ClusterOperator{Status: configv1.ClusterOperatorStatus{
+				Conditions: []configv1.ClusterOperatorStatusCondition{{Type: configv1.OperatorProgressing, Status: configv1.ConditionTrue}, {Type: configv1.OperatorDegraded, Status: configv1.ConditionTrue}}},
+			},
+		},
+		{
+			name:           "no conditions",
+			releaseVersion: "some-version",
+			operatorImage:  "some-pull-spec",
+			optr:           &Operator{vStore: newVersionStore(), eventRecorder: &record.FakeRecorder{}},
+			co:             &configv1.ClusterOperator{},
+			expected: &configv1.ClusterOperator{
+				Status: configv1.ClusterOperatorStatus{
+					Versions: []configv1.OperandVersion{
+						{Name: "operator", Version: "some-version"},
+						{Name: "operator-image", Version: "some-pull-spec"},
+					},
+				},
+			},
+		},
+		{
+			name:           "happy path",
+			releaseVersion: "some-version",
+			operatorImage:  "some-pull-spec",
+			optr:           &Operator{vStore: newVersionStore(), eventRecorder: &record.FakeRecorder{}},
+			co: &configv1.ClusterOperator{
+				Status: configv1.ClusterOperatorStatus{
+					Versions: []configv1.OperandVersion{
+						{Name: "operator", Version: "previous-version"},
+						{Name: "operator-image", Version: "previous-pull-spec"},
+					},
+				},
+			},
+			expected: &configv1.ClusterOperator{
+				Status: configv1.ClusterOperatorStatus{
+					Versions: []configv1.OperandVersion{
+						{Name: "operator", Version: "some-version"},
+						{Name: "operator-image", Version: "some-pull-spec"},
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			version.ReleaseVersion = tc.releaseVersion
+			version.OperatorImage = tc.operatorImage
+			if tc.optr.vStore != nil {
+				tc.optr.vStore.Set("operator", version.ReleaseVersion)
+				tc.optr.vStore.Set("operator-image", version.OperatorImage)
+			}
+			tc.optr.syncVersion(tc.co)
+			if diff := cmp.Diff(tc.expected, tc.co); diff != "" {
+				t.Errorf("%s differs from expected:\n%s", tc.name, diff)
+			}
+			t.Cleanup(func() {
+				version.ReleaseVersion = tmpReleaseVersion
+				version.OperatorImage = tmpOperatorImage
+			})
+		})
 	}
 }
